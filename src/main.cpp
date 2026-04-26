@@ -11,10 +11,9 @@
 Servo servos[MAX_BIND_SERVOS];
 uint8_t servoCount = 0;
 
-int motors[MAX_BIND_MOTORS][2];
+int motors[MAX_BIND_MOTORS][3];
 int motorCount = 0;
-
-auto input = "";
+int motorSpeed = 128;
 
 void registerServo(const int pin) {
     uint8_t outPin;
@@ -43,12 +42,14 @@ void registerServo(const int pin) {
     servoCount++;
 }
 
-void registerMotor(const uint8_t forward, const uint8_t backward) {
+void registerMotor(const uint8_t forward, const uint8_t backward, const uint8_t speed) {
     pinMode(forward, OUTPUT);
     pinMode(backward, OUTPUT);
+    pinMode(speed, OUTPUT);
 
     motors[motorCount][0] = forward;
     motors[motorCount][1] = backward;
+    motors[motorCount][2] = speed;
     motorCount++;
 }
 
@@ -65,9 +66,37 @@ void deregisterMotors() {
     }
 }
 
+
+void setGate(const uint8_t gate, const uint8_t angle) {
+    servos[gate].write(angle);
+}
+
+void setDirection(const uint8_t direction){
+    for (auto motor : motors){
+        digitalWrite(motor[0], LOW);
+        digitalWrite(motor[1], LOW);
+        analogWrite(motor[2], 0);
+    }
+    switch (direction) {
+        case 1:
+            for (auto motor : motors){
+                digitalWrite(motor[0], HIGH);
+                analogWrite(motor[2], motorSpeed);
+            }
+            break;
+        case 2:
+            for (auto motor : motors){
+                digitalWrite(motor[1], HIGH);
+                analogWrite(motor[2], motorSpeed);
+            }
+            break;
+        default:
+            break;
+    }
+}
+
 void parseJson(const char *json) {
     StaticJsonBuffer<256> jsonBuffer;
-
     JsonObject &root = jsonBuffer.parseObject(json);
 
     if (!root.success()) {
@@ -75,48 +104,90 @@ void parseJson(const char *json) {
         return;
     }
 
+    const char* task = root["task"];
+
+    if (!task) {
+        Serial.println("No task");
+        return;
+    }
+
     // ---------- SERVOS ----------
-    JsonArray &json_servos = root["servos"];
+    if (strcmp(task, "servos") == 0) {
+        JsonArray &json_servos = root["servos"];
 
-    if (json_servos.success()) {
-        Serial.println("Servos: ");
+        Serial.println("Servos:");
         deregisterServos();
-        for (auto &&servo: json_servos) {
-            const uint8_t s = servo;
 
+        for (auto &&servo : json_servos) {
+            uint8_t s = servo;
             registerServo(s);
 
             Serial.print(s);
             Serial.print("; ");
         }
+        Serial.println();
     }
 
-    // ---------- MOTORS ----------
-    JsonArray &json_motors = root["motors"];
+        // ---------- MOTORS ----------
+    else if (strcmp(task, "motors") == 0) {
+        JsonArray &json_motors = root["motors"];
 
-    if (json_motors.success()) {
         Serial.println("Motors:");
         deregisterMotors();
-        for (auto &&motor: json_motors) {
+
+        for (auto &&motor : json_motors) {
             JsonArray &pair = motor;
 
-            const uint8_t forward = pair[0];
-            const uint8_t backward = pair[1];
+            uint8_t forward = pair[0];
+            uint8_t backward = pair[1];
+            uint8_t speed = pair[2];
 
-            registerMotor(forward, backward);
+            registerMotor(forward, backward, speed);
 
             Serial.print(forward);
             Serial.print(", ");
             Serial.print(backward);
+            Serial.print(", ");
+            Serial.print(speed);
             Serial.print("; ");
         }
+        Serial.println();
+    }
+
+    // ---------- SPEED ----------
+    else if (strcmp(task, "speed") == 0) {
+        int speed = root["speed"];
+        motorSpeed = speed;
+        Serial.print("Speed: ");
+        Serial.println(speed);
+    }
+
+        // ---------- GATE ----------
+    else if (strcmp(task, "gate") == 0) {
+        uint8_t gate = root["gate"];
+        uint8_t angle = root["angle"];
+
+        Serial.print("Gate ");
+        Serial.print(gate);
+        Serial.print(": ");
+        Serial.println(angle);
+
+        setGate(gate, angle);
+    }
+
+        // ---------- DIRECTION ----------
+    else if (strcmp(task, "direction") == 0) {
+        uint8_t direction = root["direction"];
+
+        Serial.print("Direction: ");
+        Serial.println(direction == 1 ? "Forward" : (direction == 2 ? "Backward" : "None"));
+        setDirection(direction);
+    }
+
+    else {
+        Serial.println("Unknown task");
     }
 }
-
-void setGate(const uint8_t gate, const uint8_t angle, const bool inverted) {
-    servos[gate].write(inverted ? 180 - angle : angle);
-}
-
 void setup() {
     servoCount = 0;
     motorCount = 0;
@@ -126,14 +197,7 @@ void setup() {
 }
 
 void loop() {
-    while (Serial.available()) {
-        const char c = static_cast<char>(Serial.read());
-
-        if (c == '\n') {
-            parseJson(input);
-            input = "";
-        } else {
-            input += c;
-        }
+    if (Serial.available()){
+        parseJson(Serial.readString().c_str());
     }
 }
